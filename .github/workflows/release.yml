@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: windows-x86_64
+            archive_ext: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x86_64
+            archive_ext: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            suffix: linux-aarch64
+            archive_ext: tar.gz
+            cross: true
+          - os: macos-13
+            target: x86_64-apple-darwin
+            suffix: macos-x86_64
+            archive_ext: tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            suffix: macos-aarch64
+            archive_ext: tar.gz
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Linux x86_64: install espeak-ng dev headers
+      - name: Install espeak-ng (Linux x86_64)
+        if: matrix.os == 'ubuntu-latest' && !matrix.cross
+        run: sudo apt-get update && sudo apt-get install -y libespeak-ng-dev pkg-config
+
+      # Linux aarch64 cross-compilation
+      - name: Install cross-compilation tools (Linux aarch64)
+        if: matrix.cross
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ $(lsb_release -cs) main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ $(lsb_release -cs)-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libespeak-ng-dev:arm64 pkg-config
+
+      # macOS: install espeak-ng via brew
+      - name: Install espeak-ng (macOS)
+        if: runner.os == 'macOS'
+        run: brew install espeak-ng pkg-config
+
+      # Windows: install espeak-ng via choco or vcpkg
+      - name: Install espeak-ng (Windows)
+        if: runner.os == 'Windows'
+        run: choco install espeak-ng -y
+        shell: cmd
+
+      - name: Build release
+        if: "!matrix.cross"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build release (cross)
+        if: matrix.cross
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          PKG_CONFIG_SYSROOT_DIR: /usr/aarch64-linux-gnu
+          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../astra-phonemizer-${{ matrix.suffix }}.tar.gz astra-phonemizer
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../astra-phonemizer-${{ matrix.suffix }}.tar.gz astra-phonemizer.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra-phonemizer-${{ matrix.suffix }}
+          path: astra-phonemizer-${{ matrix.suffix }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect archives
+        run: |
+          mkdir release
+          find artifacts -name '*.tar.gz' -exec cp {} release/ \;
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd release
+          sha256sum *.tar.gz > SHA256SUMS
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
