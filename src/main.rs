@@ -68,7 +68,22 @@ struct PhonemeResponse {
 // ---------------------------------------------------------------------------
 
 fn init_espeak() -> Result<(), String> {
-    let rc = unsafe { espeak_Initialize(AUDIO_OUTPUT_RETRIEVAL, 0, std::ptr::null(), 0) };
+    // On Windows, espeak-ng data is bundled alongside the binary.
+    // On Linux/macOS, system-installed espeak-ng-data is used (default path).
+    let path_cstring = if cfg!(windows) {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .and_then(|d| CString::new(d.to_string_lossy().as_bytes()).ok())
+    } else {
+        None
+    };
+
+    let path_ptr = path_cstring
+        .as_ref()
+        .map_or(std::ptr::null(), |p| p.as_ptr());
+
+    let rc = unsafe { espeak_Initialize(AUDIO_OUTPUT_RETRIEVAL, 0, path_ptr, 0) };
     if rc < 0 {
         return Err(format!("espeak_Initialize failed with code {}", rc));
     }

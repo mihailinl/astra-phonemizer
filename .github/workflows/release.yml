@@ -105,10 +105,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          # Include espeak-ng DLL alongside the binary
+          # Include espeak-ng DLL and data directory alongside the binary
           cp "$ESPEAK_DLL_DIR/libespeak-ng.dll" target/${{ matrix.target }}/release/ || true
+          cp -r "C:/espeak-ng/espeak-ng-data" target/${{ matrix.target }}/release/ || true
           cd target/${{ matrix.target }}/release
-          tar czf ../../../astra-phonemizer-${{ matrix.suffix }}.tar.gz astra-phonemizer.exe libespeak-ng.dll
+          tar czf ../../../astra-phonemizer-${{ matrix.suffix }}.tar.gz astra-phonemizer.exe libespeak-ng.dll espeak-ng-data/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
