@@ -45,12 +45,58 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install espeak-ng pkg-config
 
-      - name: Install espeak-ng (Windows via vcpkg)
+      - name: Install espeak-ng (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
-          vcpkg install espeak-ng:x64-windows
-          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
+          # Download espeak-ng release (MSI installs the DLL + data)
+          $msiUrl = "https://github.com/espeak-ng/espeak-ng/releases/download/1.51/espeak-ng-X64.msi"
+          Invoke-WebRequest -Uri $msiUrl -OutFile espeak-ng.msi
+          Start-Process msiexec.exe -Wait -ArgumentList '/i', 'espeak-ng.msi', '/quiet', '/norestart', "INSTALLDIR=C:\espeak-ng"
+
+          # The MSI installs to C:\Program Files\eSpeak NG — find the DLL
+          $espeakDir = "C:\Program Files\eSpeak NG"
+          if (!(Test-Path "$espeakDir")) {
+            $espeakDir = "C:\espeak-ng"
+          }
+          Write-Host "espeak-ng installed to: $espeakDir"
+          Get-ChildItem $espeakDir -Recurse | ForEach-Object { Write-Host $_.FullName }
+
+          # Create a lib directory and generate import library from DLL
+          $libDir = "C:\espeak-ng-lib"
+          New-Item -ItemType Directory -Force -Path $libDir
+
+          # Find the DLL
+          $dll = Get-ChildItem "$espeakDir" -Recurse -Filter "espeak-ng.dll" | Select-Object -First 1
+          if ($dll) {
+            Copy-Item $dll.FullName "$libDir\espeak-ng.dll"
+
+            # Generate .def file from DLL exports
+            $dumpbin = & "dumpbin" /exports $dll.FullName
+            $defContent = "LIBRARY espeak-ng`nEXPORTS`n"
+            $inExports = $false
+            foreach ($line in $dumpbin) {
+              if ($line -match "ordinal\s+hint\s+RVA\s+name") {
+                $inExports = $true
+                continue
+              }
+              if ($inExports -and $line -match "^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)") {
+                $defContent += "  $($Matches[1])`n"
+              }
+            }
+            Set-Content "$libDir\espeak-ng.def" $defContent
+
+            # Generate import library
+            & "lib" "/def:$libDir\espeak-ng.def" "/out:$libDir\espeak-ng.lib" "/machine:x64"
+            Write-Host "Generated espeak-ng.lib"
+          } else {
+            Write-Host "ERROR: espeak-ng.dll not found!"
+            exit 1
+          }
+
+          # Set env for build.rs
+          echo "ESPEAK_LIB_DIR=$libDir" >> $env:GITHUB_ENV
+          echo "ESPEAK_DLL_DIR=$libDir" >> $env:GITHUB_ENV
 
       - name: Build release (Unix)
         if: runner.os != 'Windows'
@@ -59,10 +105,7 @@ jobs:
       - name: Build release (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: |
-          export ESPEAK_LIB_DIR="$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib"
-          export ESPEAK_INCLUDE_DIR="$VCPKG_INSTALLATION_ROOT/installed/x64-windows/include"
-          cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -75,7 +118,7 @@ jobs:
         shell: bash
         run: |
           # Include espeak-ng DLL alongside the binary
-          cp "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/espeak-ng.dll" target/${{ matrix.target }}/release/ || true
+          cp "$ESPEAK_DLL_DIR/espeak-ng.dll" target/${{ matrix.target }}/release/ || true
           cd target/${{ matrix.target }}/release
           tar czf ../../../astra-phonemizer-${{ matrix.suffix }}.tar.gz astra-phonemizer.exe espeak-ng.dll
 
