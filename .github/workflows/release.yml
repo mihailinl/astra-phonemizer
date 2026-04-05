@@ -67,13 +67,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path $libDir
 
           # Find the DLL
-          $dll = Get-ChildItem "$espeakDir" -Recurse -Filter "espeak-ng.dll" | Select-Object -First 1
+          $dll = Get-ChildItem "$espeakDir" -Recurse -Filter "libespeak-ng.dll" | Select-Object -First 1
           if ($dll) {
-            Copy-Item $dll.FullName "$libDir\espeak-ng.dll"
+            Copy-Item $dll.FullName "$libDir\libespeak-ng.dll"
 
             # Generate .def file from DLL exports
             $dumpbin = & "dumpbin" /exports $dll.FullName
-            $defContent = "LIBRARY espeak-ng`nEXPORTS`n"
+            $defContent = "LIBRARY libespeak-ng`nEXPORTS`n"
             $inExports = $false
             foreach ($line in $dumpbin) {
               if ($line -match "ordinal\s+hint\s+RVA\s+name") {
@@ -90,7 +90,7 @@ jobs:
             & "lib" "/def:$libDir\espeak-ng.def" "/out:$libDir\espeak-ng.lib" "/machine:x64"
             Write-Host "Generated espeak-ng.lib"
           } else {
-            Write-Host "ERROR: espeak-ng.dll not found!"
+            Write-Host "ERROR: libespeak-ng.dll not found!"
             exit 1
           }
 
@@ -118,9 +118,9 @@ jobs:
         shell: bash
         run: |
           # Include espeak-ng DLL alongside the binary
-          cp "$ESPEAK_DLL_DIR/espeak-ng.dll" target/${{ matrix.target }}/release/ || true
+          cp "$ESPEAK_DLL_DIR/libespeak-ng.dll" target/${{ matrix.target }}/release/ || true
           cd target/${{ matrix.target }}/release
-          tar czf ../../../astra-phonemizer-${{ matrix.suffix }}.tar.gz astra-phonemizer.exe espeak-ng.dll
+          tar czf ../../../astra-phonemizer-${{ matrix.suffix }}.tar.gz astra-phonemizer.exe libespeak-ng.dll
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
