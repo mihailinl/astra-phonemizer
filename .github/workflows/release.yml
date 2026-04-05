@@ -47,56 +47,44 @@ jobs:
 
       - name: Install espeak-ng (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: cmd
         run: |
-          # Download espeak-ng release (MSI installs the DLL + data)
-          $msiUrl = "https://github.com/espeak-ng/espeak-ng/releases/download/1.51/espeak-ng-X64.msi"
-          Invoke-WebRequest -Uri $msiUrl -OutFile espeak-ng.msi
-          Start-Process msiexec.exe -Wait -ArgumentList '/i', 'espeak-ng.msi', '/quiet', '/norestart', "INSTALLDIR=C:\espeak-ng"
+          :: Download espeak-ng MSI
+          curl -L -o espeak-ng.msi https://github.com/espeak-ng/espeak-ng/releases/download/1.51/espeak-ng-X64.msi
+          msiexec /i espeak-ng.msi /quiet /norestart INSTALLDIR=C:\espeak-ng
 
-          # The MSI installs to C:\Program Files\eSpeak NG — find the DLL
-          $espeakDir = "C:\Program Files\eSpeak NG"
-          if (!(Test-Path "$espeakDir")) {
-            $espeakDir = "C:\espeak-ng"
-          }
-          Write-Host "espeak-ng installed to: $espeakDir"
-          Get-ChildItem $espeakDir -Recurse | ForEach-Object { Write-Host $_.FullName }
+          :: Create lib dir
+          mkdir C:\espeak-ng-lib
+          copy C:\espeak-ng\libespeak-ng.dll C:\espeak-ng-lib\
 
-          # Create a lib directory and generate import library from DLL
-          $libDir = "C:\espeak-ng-lib"
-          New-Item -ItemType Directory -Force -Path $libDir
+          :: Write .def with the espeak-ng functions we use
+          (
+            echo LIBRARY libespeak-ng
+            echo EXPORTS
+            echo   espeak_Initialize
+            echo   espeak_SetVoiceByName
+            echo   espeak_TextToPhonemes
+            echo   espeak_Info
+            echo   espeak_Terminate
+            echo   espeak_SetParameter
+            echo   espeak_Synth
+            echo   espeak_Cancel
+            echo   espeak_ListVoices
+          ) > C:\espeak-ng-lib\espeak-ng.def
 
-          # Find the DLL
-          $dll = Get-ChildItem "$espeakDir" -Recurse -Filter "libespeak-ng.dll" | Select-Object -First 1
-          if ($dll) {
-            Copy-Item $dll.FullName "$libDir\libespeak-ng.dll"
+          :: Generate import library using lib.exe from VS
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          lib /def:C:\espeak-ng-lib\espeak-ng.def /out:C:\espeak-ng-lib\espeak-ng.lib /machine:x64
 
-            # Generate .def file from DLL exports
-            $dumpbin = & "dumpbin" /exports $dll.FullName
-            $defContent = "LIBRARY libespeak-ng`nEXPORTS`n"
-            $inExports = $false
-            foreach ($line in $dumpbin) {
-              if ($line -match "ordinal\s+hint\s+RVA\s+name") {
-                $inExports = $true
-                continue
-              }
-              if ($inExports -and $line -match "^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)") {
-                $defContent += "  $($Matches[1])`n"
-              }
-            }
-            Set-Content "$libDir\espeak-ng.def" $defContent
+          :: Verify
+          dir C:\espeak-ng-lib\
 
-            # Generate import library
-            & "lib" "/def:$libDir\espeak-ng.def" "/out:$libDir\espeak-ng.lib" "/machine:x64"
-            Write-Host "Generated espeak-ng.lib"
-          } else {
-            Write-Host "ERROR: libespeak-ng.dll not found!"
-            exit 1
-          }
-
-          # Set env for build.rs
-          echo "ESPEAK_LIB_DIR=$libDir" >> $env:GITHUB_ENV
-          echo "ESPEAK_DLL_DIR=$libDir" >> $env:GITHUB_ENV
+      - name: Set espeak env (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "ESPEAK_LIB_DIR=C:/espeak-ng-lib" >> $GITHUB_ENV
+          echo "ESPEAK_DLL_DIR=C:/espeak-ng-lib" >> $GITHUB_ENV
 
       - name: Build release (Unix)
         if: runner.os != 'Windows'
