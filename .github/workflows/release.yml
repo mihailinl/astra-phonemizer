@@ -26,9 +26,6 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             suffix: macos-aarch64
-          - os: macos-15
-            target: x86_64-apple-darwin
-            suffix: macos-x86_64
 
     runs-on: ${{ matrix.os }}
 
@@ -48,16 +45,24 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install espeak-ng pkg-config
 
-      - name: Install espeak-ng (Windows)
+      - name: Install espeak-ng (Windows via vcpkg)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          $espeakUrl = "https://github.com/espeak-ng/espeak-ng/releases/download/1.51/espeak-ng-X64.msi"
-          Invoke-WebRequest -Uri $espeakUrl -OutFile espeak-ng.msi
-          Start-Process msiexec.exe -Wait -ArgumentList '/i', 'espeak-ng.msi', '/quiet', '/norestart'
+          vcpkg install espeak-ng:x64-windows
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
 
-      - name: Build release
+      - name: Build release (Unix)
+        if: runner.os != 'Windows'
         run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build release (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export ESPEAK_LIB_DIR="$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib"
+          export ESPEAK_INCLUDE_DIR="$VCPKG_INSTALLATION_ROOT/installed/x64-windows/include"
+          cargo build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -69,8 +74,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          # Include espeak-ng DLL alongside the binary
+          cp "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/espeak-ng.dll" target/${{ matrix.target }}/release/ || true
           cd target/${{ matrix.target }}/release
-          tar czf ../../../astra-phonemizer-${{ matrix.suffix }}.tar.gz astra-phonemizer.exe
+          tar czf ../../../astra-phonemizer-${{ matrix.suffix }}.tar.gz astra-phonemizer.exe espeak-ng.dll
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -80,7 +87,7 @@ jobs:
 
   release:
     needs: build
-    if: always() && contains(needs.build.result, 'success') || needs.build.result == 'success'
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -92,11 +99,13 @@ jobs:
         run: |
           mkdir -p release
           find artifacts -name '*.tar.gz' -exec cp {} release/ \;
+          ls -la release/
 
       - name: Generate SHA256SUMS
         run: |
           cd release
           sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create release
         uses: softprops/action-gh-release@v2

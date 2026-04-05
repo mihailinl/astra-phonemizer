@@ -1,13 +1,18 @@
 fn main() {
-    // Try pkg-config first (Linux/macOS)
+    // If ESPEAK_LIB_DIR is set (e.g. from vcpkg CI), use it directly
+    if let Ok(lib_dir) = std::env::var("ESPEAK_LIB_DIR") {
+        println!("cargo:rustc-link-search=native={}", lib_dir);
+        println!("cargo:rustc-link-lib=dylib=espeak-ng");
+        return;
+    }
+
+    // Try pkg-config (Linux/macOS)
     if pkg_config::probe_library("espeak-ng").is_ok() {
         return;
     }
 
-    // Fallback: try linking directly
-    // On Windows, espeak-ng is typically installed to C:\Program Files\eSpeak NG
+    // Windows fallback: try common install paths
     if cfg!(target_os = "windows") {
-        // Try common Windows install paths
         let paths = [
             r"C:\Program Files\eSpeak NG",
             r"C:\Program Files (x86)\eSpeak NG",
@@ -20,8 +25,8 @@ fn main() {
                 return;
             }
         }
-        // Try vcpkg-installed path
-        if let Ok(vcpkg_root) = std::env::var("VCPKG_ROOT") {
+        // Try vcpkg default
+        if let Ok(vcpkg_root) = std::env::var("VCPKG_INSTALLATION_ROOT") {
             let lib_path = format!("{}\\installed\\x64-windows\\lib", vcpkg_root);
             if std::path::Path::new(&lib_path).exists() {
                 println!("cargo:rustc-link-search=native={}", lib_path);
